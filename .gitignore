@@ -1,0 +1,4 @@
+node_modules/
+dist/
+fdcdata/
+.DS_Store

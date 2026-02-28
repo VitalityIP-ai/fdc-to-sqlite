@@ -1,0 +1,19 @@
+{
+  "name": "fdc-to-sqlite",
+  "version": "1.0.0",
+  "description": "Download and import USDA FoodData Central CSV data into SQLite",
+  "type": "module",
+  "scripts": {
+    "build": "npx tsx src/index.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11",
+    "csv-parse": "^5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7",
+    "@types/node": "^22",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
