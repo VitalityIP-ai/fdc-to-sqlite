@@ -86,4 +86,4 @@ See the `INDEXES` map in `src/index.ts` for the full list.
 
 ## License
 
-Public domain data from the USDA. Tool code is unlicensed.
+GPL-3.0 -- see [LICENSE](LICENSE). The FDC dataset itself is public domain (USDA).
