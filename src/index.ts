@@ -298,7 +298,7 @@ async function main() {
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
 
   const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+  db.pragma("journal_mode = DELETE");
   db.pragma("synchronous = OFF");
 
   const importedTables = new Set<string>();
