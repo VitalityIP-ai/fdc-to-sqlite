@@ -7,22 +7,85 @@ import { Writable } from "node:stream";
 import Database from "better-sqlite3";
 import { parse } from "csv-parse";
 
-interface Config {
-  downloadUrl: string;
-  dataDir: string;
-  outputDb: string;
-  tables: string[];
-}
-
+const DEFAULT_URL = "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_csv_2025-12-18.zip";
+const DEFAULT_DIR = "fdcdata";
+const DEFAULT_OUT = "fdcdata/fdc.sqlite";
 const BATCH_SIZE = 5000;
 const SKIP_FILES = new Set(["all_downloaded_table_record_counts"]);
 
-function loadConfig(): Config {
-  const raw = fs.readFileSync(
-    path.resolve(import.meta.dirname, "..", "config.json"),
-    "utf-8"
-  );
-  return JSON.parse(raw);
+interface Options {
+  url: string;
+  dir: string;
+  out: string;
+  tables: string[];
+  types: string[];
+}
+
+function printUsage() {
+  console.log(`
+Usage: npx tsx src/index.ts [options]
+
+Options:
+  --url <url>      Download URL for the FDC CSV zip
+                   Default: ${DEFAULT_URL}
+  --dir <path>     Working directory for zip and extracted files
+                   Default: ${DEFAULT_DIR}
+  --out <path>     Output SQLite database path
+                   Default: ${DEFAULT_OUT}
+  --tables <list>  Comma-separated table names to import, or * for all
+                   Default: *
+  --types <list>   Comma-separated data_type values to keep
+                   (e.g. sr_legacy_food,foundation_food,survey_fndds_food)
+                   If omitted, all data types are kept.
+  --help           Show this help message
+
+Examples:
+  npx tsx src/index.ts
+  npx tsx src/index.ts --tables food,food_nutrient,nutrient --out my.sqlite
+  npx tsx src/index.ts --types sr_legacy_food,foundation_food,survey_fndds_food
+`.trim());
+}
+
+function parseArgs(): Options {
+  const args = process.argv.slice(2);
+  const opts: Options = {
+    url: DEFAULT_URL,
+    dir: DEFAULT_DIR,
+    out: DEFAULT_OUT,
+    tables: ["*"],
+    types: [],
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case "--help":
+      case "-h":
+        printUsage();
+        process.exit(0);
+        break;
+      case "--url":
+        opts.url = args[++i];
+        break;
+      case "--dir":
+        opts.dir = args[++i];
+        break;
+      case "--out":
+        opts.out = args[++i];
+        break;
+      case "--tables":
+        opts.tables = args[++i].split(",").map((s) => s.trim());
+        break;
+      case "--types":
+        opts.types = args[++i].split(",").map((s) => s.trim());
+        break;
+      default:
+        console.error(`Unknown option: ${args[i]}`);
+        printUsage();
+        process.exit(1);
+    }
+  }
+
+  return opts;
 }
 
 function ensureDir(dir: string) {
@@ -275,14 +338,54 @@ function createIndexes(db: Database.Database, importedTables: Set<string>) {
   console.log(`Created ${count} indexes`);
 }
 
+// ── Filter by data type ──────────────────────────────────────────────────
+
+function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+  const cols = db.pragma(`table_info("${table}")`) as { name: string }[];
+  return cols.some((c) => c.name === column);
+}
+
+function filterByDataTypes(db: Database.Database, dataTypes: string[], importedTables: Set<string>) {
+  if (!importedTables.has("food")) {
+    console.log("\nSkipping data type filter (food table not imported)");
+    return;
+  }
+
+  const placeholders = dataTypes.map(() => "?").join(", ");
+  const beforeCount = (db.prepare("SELECT COUNT(*) as n FROM food").get() as { n: number }).n;
+
+  console.log(`\nFiltering by data types: ${dataTypes.join(", ")}`);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_food_fdc_id_tmp ON food(fdc_id)");
+
+  const deleted = db.prepare(`DELETE FROM food WHERE data_type NOT IN (${placeholders})`).run(...dataTypes);
+  const afterCount = beforeCount - deleted.changes;
+  console.log(`  food: ${beforeCount.toLocaleString()} \u2192 ${afterCount.toLocaleString()} rows`);
+
+  for (const table of importedTables) {
+    if (table === "food") continue;
+    if (!tableHasColumn(db, table, "fdc_id")) continue;
+
+    const before = (db.prepare(`SELECT COUNT(*) as n FROM "${table}"`).get() as { n: number }).n;
+    const result = db.prepare(
+      `DELETE FROM "${table}" WHERE fdc_id NOT IN (SELECT fdc_id FROM food)`
+    ).run();
+    const after = before - result.changes;
+    console.log(`  ${table}: ${before.toLocaleString()} \u2192 ${after.toLocaleString()} rows`);
+  }
+
+  db.exec("DROP INDEX IF EXISTS idx_food_fdc_id_tmp");
+  console.log("Vacuuming ...");
+  db.exec("VACUUM");
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const config = loadConfig();
-  const dataDir = path.resolve(import.meta.dirname, "..", config.dataDir);
+  const opts = parseArgs();
+  const dataDir = path.resolve(opts.dir);
   ensureDir(dataDir);
 
-  await downloadZip(config.downloadUrl, dataDir);
+  await downloadZip(opts.url, dataDir);
 
   const zipPath = findMostRecentZip(dataDir);
   console.log(`Using zip: ${zipPath}`);
@@ -290,11 +393,11 @@ async function main() {
   const extractedDir = extractZip(zipPath, dataDir);
   console.log(`Using extracted dir: ${extractedDir}`);
 
-  const csvFiles = discoverCsvFiles(extractedDir, config.tables);
+  const csvFiles = discoverCsvFiles(extractedDir, opts.tables);
   console.log(`\nFound ${csvFiles.length} CSV tables to import:`);
   csvFiles.forEach((f) => console.log(`  - ${f.tableName}`));
 
-  const dbPath = path.resolve(import.meta.dirname, "..", config.outputDb);
+  const dbPath = path.resolve(opts.out);
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
 
   const db = new Database(dbPath);
@@ -305,6 +408,10 @@ async function main() {
   for (const csv of csvFiles) {
     await importCsv(db, csv.tableName, csv.filePath);
     importedTables.add(csv.tableName);
+  }
+
+  if (opts.types.length > 0) {
+    filterByDataTypes(db, opts.types, importedTables);
   }
 
   createIndexes(db, importedTables);

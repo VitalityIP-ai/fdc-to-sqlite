@@ -14,55 +14,73 @@ npm install
 npx tsx src/index.ts
 ```
 
-The script will:
+With no arguments the script downloads the full FDC dataset, imports all 34 tables, and writes `fdcdata/fdc.sqlite`.
 
-1. Download the FDC "Full Download of All Data Types" zip (~458 MB) into `fdcdata/`
-2. Extract the CSV files
-3. Import every CSV table into `fdcdata/fdc.sqlite`
-4. Create indexes on frequently queried columns
+## CLI Options
 
-Each step is idempotent -- if the zip has already been downloaded or extracted, those steps are skipped automatically. The database is always rebuilt from scratch.
-
-## Configuration
-
-Edit `config.json` to customize behavior:
-
-```json
-{
-  "downloadUrl": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_csv_2025-12-18.zip",
-  "dataDir": "fdcdata",
-  "outputDb": "fdcdata/fdc.sqlite",
-  "tables": ["*"]
-}
+```
+npx tsx src/index.ts [options]
 ```
 
-| Field         | Description |
-|---------------|-------------|
-| `downloadUrl` | URL of the FDC CSV zip to download |
-| `dataDir`     | Local directory for the zip and extracted files |
-| `outputDb`    | Path for the output SQLite database |
-| `tables`      | `["*"]` for all tables, or a list of specific table names to import |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--url <url>` | Current FDC full download URL | Download URL for the zip |
+| `--dir <path>` | `fdcdata` | Working directory for zip and extracted files |
+| `--out <path>` | `fdcdata/fdc.sqlite` | Output SQLite database path |
+| `--tables <list>` | `*` (all) | Comma-separated table names to import, or `*` for all |
+| `--types <list>` | *(none -- keep all)* | Comma-separated `data_type` values to keep |
+| `--help` | | Show usage and exit |
 
-### Importing specific tables
+## Usage Examples
 
-To import only a subset of tables, list them by name (the CSV filename without `.csv`):
+### Full import (all tables, all data types)
 
-```json
-{
-  "tables": ["food", "food_nutrient", "nutrient", "branded_food", "food_category"]
-}
+```bash
+npx tsx src/index.ts
 ```
 
-### Using a different dataset
+### Core nutrition tables, filtered to SR Legacy + Foundation + Survey FNDDS
 
-Visit <https://fdc.nal.usda.gov/download-datasets> to find other dataset URLs (Foundation Foods only, Branded Foods only, etc.) and set `downloadUrl` accordingly.
+```bash
+npx tsx src/index.ts \
+  --tables food,food_nutrient,nutrient,food_category,food_portion,measure_unit,sr_legacy_food,foundation_food,food_nutrient_derivation,food_nutrient_source,food_calorie_conversion_factor,food_nutrient_conversion_factor,food_protein_conversion_factor,food_component,retention_factor,input_food \
+  --types sr_legacy_food,foundation_food,survey_fndds_food \
+  --out fdcdata/fdc-core.sqlite
+```
+
+### Just a few tables
+
+```bash
+npx tsx src/index.ts --tables food,food_nutrient,nutrient
+```
+
+### Custom output path
+
+```bash
+npx tsx src/index.ts --out /tmp/fdc.sqlite
+```
+
+### Use a different dataset URL
+
+Visit <https://fdc.nal.usda.gov/download-datasets> to find other dataset URLs (Foundation Foods only, Branded Foods only, etc.):
+
+```bash
+npx tsx src/index.ts --url https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_csv_2024-10-31.zip
+```
+
+## Filtering by Data Type
+
+The `food` table contains rows from several data sources. When `--types` is set, the script deletes rows from `food` that don't match the specified types, then cascades the removal to any table with an `fdc_id` column. Lookup tables (e.g. `nutrient`, `measure_unit`) are not affected, and the database is vacuumed afterwards to reclaim space.
+
+Available data types: `branded_food`, `foundation_food`, `sr_legacy_food`, `survey_fndds_food`, `experimental_food`, `sub_sample_food`, `market_acquistion`, `sample_food`, `agricultural_acquisition`
 
 ## How It Works
 
-1. **Download** -- Fetches the zip from `downloadUrl` into `dataDir`, showing download progress. Skipped if the file already exists.
-2. **Extract** -- Runs `unzip` to extract CSV files. Skipped if a `FoodData_Central*` directory already exists in `dataDir`.
+1. **Download** -- Fetches the zip from `--url` into `--dir`, showing download progress. Skipped if the file already exists.
+2. **Extract** -- Runs `unzip` to extract CSV files. Skipped if a `FoodData_Central*` directory already exists in `--dir`.
 3. **Import** -- For each CSV, creates a SQLite table (all columns as `TEXT`) and bulk-inserts rows in batches of 5,000 inside transactions for speed.
-4. **Index** -- Creates indexes on common foreign-key and lookup columns (e.g. `fdc_id`, `nutrient_id`, `gtin_upc`).
+4. **Filter** -- If `--types` is set, deletes rows from `food` not matching the specified types, then cascades the removal to any table with an `fdc_id` column. Finishes with a `VACUUM`.
+5. **Index** -- Creates indexes on common foreign-key and lookup columns (e.g. `fdc_id`, `nutrient_id`, `gtin_upc`).
 
 ## Available Tables
 

@@ -1,6 +1,0 @@
-{
-  "downloadUrl": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_csv_2025-12-18.zip",
-  "dataDir": "fdcdata",
-  "outputDb": "fdcdata/fdc.sqlite",
-  "tables": ["*"]
-}
