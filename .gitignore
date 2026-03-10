@@ -1,4 +1,8 @@
 node_modules/
 dist/
 fdcdata/
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 .DS_Store

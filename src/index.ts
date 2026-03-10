@@ -19,6 +19,7 @@ interface Options {
   out: string;
   tables: string[];
   types: string[];
+  embeddings: boolean;
 }
 
 function printUsage() {
@@ -37,12 +38,14 @@ Options:
   --types <list>   Comma-separated data_type values to keep
                    (e.g. sr_legacy_food,foundation_food,survey_fndds_food)
                    If omitted, all data types are kept.
+  --embeddings     Build vector embeddings for food descriptions (requires .env)
   --help           Show this help message
 
 Examples:
   npx tsx src/index.ts
   npx tsx src/index.ts --tables food,food_nutrient,nutrient --out my.sqlite
   npx tsx src/index.ts --types sr_legacy_food,foundation_food,survey_fndds_food
+  npx tsx src/index.ts --embeddings
 `.trim());
 }
 
@@ -54,6 +57,7 @@ function parseArgs(): Options {
     out: DEFAULT_OUT,
     tables: ["*"],
     types: [],
+    embeddings: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -77,6 +81,9 @@ function parseArgs(): Options {
         break;
       case "--types":
         opts.types = args[++i].split(",").map((s) => s.trim());
+        break;
+      case "--embeddings":
+        opts.embeddings = true;
         break;
       default:
         console.error(`Unknown option: ${args[i]}`);
@@ -361,7 +368,12 @@ function filterByDataTypes(db: Database.Database, dataTypes: string[], importedT
   const afterCount = beforeCount - deleted.changes;
   console.log(`  food: ${beforeCount.toLocaleString()} \u2192 ${afterCount.toLocaleString()} rows`);
 
-  for (const table of importedTables) {
+  const allTables = (db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+  ).all() as { name: string }[]).map((r) => r.name)
+    .filter((n) => !n.includes("_chunks") && !n.includes("_rowids") && !n.includes("_vector_"));
+
+  for (const table of allTables) {
     if (table === "food") continue;
     if (!tableHasColumn(db, table, "fdc_id")) continue;
 
@@ -370,7 +382,9 @@ function filterByDataTypes(db: Database.Database, dataTypes: string[], importedT
       `DELETE FROM "${table}" WHERE fdc_id NOT IN (SELECT fdc_id FROM food)`
     ).run();
     const after = before - result.changes;
-    console.log(`  ${table}: ${before.toLocaleString()} \u2192 ${after.toLocaleString()} rows`);
+    if (before > 0) {
+      console.log(`  ${table}: ${before.toLocaleString()} \u2192 ${after.toLocaleString()} rows`);
+    }
   }
 
   db.exec("DROP INDEX IF EXISTS idx_food_fdc_id_tmp");
@@ -398,7 +412,7 @@ async function main() {
   csvFiles.forEach((f) => console.log(`  - ${f.tableName}`));
 
   const dbPath = path.resolve(opts.out);
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  if (fs.existsSync(dbPath) && !opts.embeddings) fs.unlinkSync(dbPath);
 
   const db = new Database(dbPath);
   db.pragma("journal_mode = DELETE");
@@ -416,7 +430,19 @@ async function main() {
 
   createIndexes(db, importedTables);
 
+  if (opts.embeddings) {
+    const { buildEmbeddings } = await import("./embeddings.js");
+    await buildEmbeddings(db, importedTables);
+  }
+
+  db.pragma("journal_mode = DELETE");
   db.close();
+
+  for (const suffix of ["-wal", "-shm"]) {
+    const aux = dbPath + suffix;
+    if (fs.existsSync(aux)) fs.unlinkSync(aux);
+  }
+
   const dbSize = fs.statSync(dbPath).size;
   console.log(
     `\nDone! Database written to ${dbPath} (${(dbSize / 1e6).toFixed(1)} MB)`

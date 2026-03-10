@@ -48,6 +48,11 @@ npx tsx src/index.ts \
   --out fdcdata/fdc-core.sqlite
 ```
 
+### Embeddings for a recipe database
+```bash
+npx tsx src/index.ts --embeddings --tables food --types sr_legacy_food,foundation_food,survey_fndds_food --out fdc-recipes.sqlite
+```
+
 ### Just a few tables
 
 ```bash
