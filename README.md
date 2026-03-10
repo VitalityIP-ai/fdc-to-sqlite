@@ -29,6 +29,7 @@ npx tsx src/index.ts [options]
 | `--out <path>` | `fdcdata/fdc.sqlite` | Output SQLite database path |
 | `--tables <list>` | `*` (all) | Comma-separated table names to import, or `*` for all |
 | `--types <list>` | *(none -- keep all)* | Comma-separated `data_type` values to keep |
+| `--embeddings` | | Build vector embeddings for food descriptions (requires `OPENAI_API_KEY` in `.env`) |
 | `--help` | | Show usage and exit |
 
 ## Usage Examples
@@ -50,8 +51,21 @@ npx tsx src/index.ts \
 
 ### Embeddings for a recipe database
 ```bash
-npx tsx src/index.ts --embeddings --tables food --types sr_legacy_food,foundation_food,survey_fndds_food --out fdc-recipes.sqlite
+npx tsx src/index.ts --embeddings \
+  --tables food,food_nutrient,nutrient,food_category,food_portion,measure_unit \
+  --types sr_legacy_food,foundation_food,survey_fndds_food,branded_food \
+  --embeddings
+  --out fdc-recipes.sqlite
 ```
+
+### Search embeddings (semantic similarity)
+Requires `OPENAI_API_KEY` in `.env` and a database built with `--embeddings`:
+
+```bash
+npm run test:embeddings -- --search "chicken breast" --db fdc-recipes.sqlite
+```
+
+Options: `--search` (required), `--db` (default: fdc.sqlite), `--limit` (default: 10), `--data-type` (e.g. `branded_food` to filter by `food.data_type`).
 
 ### Just a few tables
 
@@ -86,6 +100,7 @@ Available data types: `branded_food`, `foundation_food`, `sr_legacy_food`, `surv
 3. **Import** -- For each CSV, creates a SQLite table (all columns as `TEXT`) and bulk-inserts rows in batches of 5,000 inside transactions for speed.
 4. **Filter** -- If `--types` is set, deletes rows from `food` not matching the specified types, then cascades the removal to any table with an `fdc_id` column. Finishes with a `VACUUM`.
 5. **Index** -- Creates indexes on common foreign-key and lookup columns (e.g. `fdc_id`, `nutrient_id`, `gtin_upc`).
+6. **Embeddings** -- If `--embeddings` is set, generates vector embeddings for food descriptions via OpenAI and stores them in a `food_description_embedding` virtual table for semantic search.
 
 ## Available Tables
 

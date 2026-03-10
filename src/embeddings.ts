@@ -60,11 +60,13 @@ export async function buildEmbeddings(
     ? (db.prepare("SELECT COUNT(*) as n FROM food_description_embedding").get() as { n: number }).n
     : 0;
 
+  // Use LEFT JOIN instead of NOT IN to avoid vec0 type mismatch (food.fdc_id TEXT vs embedding INTEGER)
   const rawRows = db
     .prepare(
-      `SELECT fdc_id, description FROM food
-       WHERE description IS NOT NULL AND description != ''
-       AND fdc_id NOT IN (SELECT fdc_id FROM food_description_embedding)`
+      `SELECT f.fdc_id, f.description FROM food f
+       LEFT JOIN food_description_embedding e ON CAST(f.fdc_id AS INTEGER) = e.fdc_id
+       WHERE f.description IS NOT NULL AND f.description != ''
+       AND e.fdc_id IS NULL`
     )
     .all() as { fdc_id: string; description: string }[];
 

@@ -18,11 +18,14 @@ import fs from "node:fs";
 const DEFAULT_DB = "fdc.sqlite";
 const DEFAULT_LIMIT = 10;
 
-function parseArgs(): { search: string; db: string; limit: number } {
+const KNN_POOL_SIZE = 500; // When filtering by data_type, fetch this many candidates
+
+function parseArgs(): { search: string; db: string; limit: number; dataType: string | null } {
   const args = process.argv.slice(2);
   let search = "";
   let db = DEFAULT_DB;
   let limit = DEFAULT_LIMIT;
+  let dataType: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -38,31 +41,37 @@ function parseArgs(): { search: string; db: string; limit: number } {
       case "-l":
         limit = parseInt(args[++i] ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT;
         break;
+      case "--data-type":
+      case "-t":
+        dataType = args[++i] ?? null;
+        break;
       case "--help":
       case "-h":
         console.log(`
 Usage: npx tsx src/test-embeddings.ts --search "<query>" [options]
 
 Options:
-  --search, -s   Search query (required)
-  --db, -d       Path to SQLite database with embeddings (default: fdc.sqlite)
-  --limit, -l    Max number of results (default: 10)
-  --help, -h     Show this help
+  --search, -s     Search query (required)
+  --db, -d         Path to SQLite database with embeddings (default: fdc.sqlite)
+  --limit, -l      Max number of results (default: 10)
+  --data-type, -t  Filter by food.data_type (e.g. branded_food)
+  --help, -h       Show this help
 
-Example:
+Examples:
   npx tsx src/test-embeddings.ts --search "chicken breast" --db fdc.sqlite --limit 5
+  npx tsx src/test-embeddings.ts --search "organic milk" --data-type branded_food
 `.trim());
         process.exit(0);
     }
   }
 
-  return { search, db, limit };
+  return { search, db, limit, dataType };
 }
 
 async function main() {
   config();
 
-  const { search, db: dbPath, limit } = parseArgs();
+  const { search, db: dbPath, limit, dataType } = parseArgs();
 
   if (!search.trim()) {
     console.error("Error: --search is required");
@@ -101,6 +110,9 @@ async function main() {
 
   console.log(`Searching for: "${search}"`);
   console.log(`Database: ${resolvedPath}`);
+  if (dataType) {
+    console.log(`Filter: data_type = ${dataType}`);
+  }
   console.log("");
 
   const openai = new OpenAI({ apiKey });
@@ -110,9 +122,25 @@ async function main() {
   });
   const queryEmbedding = new Float32Array(response.data[0].embedding);
 
-  const rows = db
-    .prepare(
-      `WITH knn AS (
+  const knnK = dataType ? KNN_POOL_SIZE : limit;
+  const query = dataType
+    ? `WITH knn AS (
+        SELECT fdc_id, distance
+        FROM food_description_embedding
+        WHERE description_embedding MATCH ?
+        AND k = ?
+      )
+      SELECT
+        knn.fdc_id,
+        food.description,
+        food.data_type,
+        knn.distance
+      FROM knn
+      INNER JOIN food ON food.fdc_id = CAST(knn.fdc_id AS TEXT)
+        AND food.data_type = ?
+      ORDER BY knn.distance ASC
+      LIMIT ?`
+    : `WITH knn AS (
         SELECT fdc_id, distance
         FROM food_description_embedding
         WHERE description_embedding MATCH ?
@@ -125,9 +153,11 @@ async function main() {
         knn.distance
       FROM knn
       LEFT JOIN food ON food.fdc_id = CAST(knn.fdc_id AS TEXT)
-      ORDER BY knn.distance ASC`
-    )
-    .all(queryEmbedding, limit) as {
+      ORDER BY knn.distance ASC`;
+
+  const rows = (dataType
+    ? db.prepare(query).all(queryEmbedding, knnK, dataType, limit)
+    : db.prepare(query).all(queryEmbedding, knnK)) as {
     fdc_id: number;
     description: string | null;
     data_type: string | null;

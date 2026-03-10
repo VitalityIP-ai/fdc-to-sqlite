@@ -342,6 +342,15 @@ function createIndexes(db: Database.Database, importedTables: Set<string>) {
     }
   }
 
+  // Ensure every table with fdc_id has an index on it (catches any not in INDEXES)
+  for (const table of importedTables) {
+    if (tableHasColumn(db, table, "fdc_id")) {
+      const idxName = `idx_${table}_fdc_id`;
+      db.exec(`CREATE INDEX IF NOT EXISTS "${idxName}" ON "${table}" ("fdc_id")`);
+      count++;
+    }
+  }
+
   console.log(`Created ${count} indexes`);
 }
 
@@ -371,7 +380,7 @@ function filterByDataTypes(db: Database.Database, dataTypes: string[], importedT
   const allTables = (db.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
   ).all() as { name: string }[]).map((r) => r.name)
-    .filter((n) => !n.includes("_chunks") && !n.includes("_rowids") && !n.includes("_vector_"));
+    .filter((n) => !n.includes("_chunks") && !n.includes("_rowids") && !n.includes("_vector_") && !n.includes("_embedding"));
 
   for (const table of allTables) {
     if (table === "food") continue;

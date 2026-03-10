@@ -4,7 +4,9 @@
   "description": "Download and import USDA FoodData Central CSV data into SQLite",
   "type": "module",
   "scripts": {
-    "build": "npx tsx src/index.ts"
+    "build": "npx tsx src/index.ts",
+    "test:embeddings": "NODE_OPTIONS=--no-deprecation npx tsx src/test-embeddings.ts",
+    "audit:branded": "npx tsx src/audit-branded-food.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11",
